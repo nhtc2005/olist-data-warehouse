@@ -1,0 +1,14 @@
+.env
+.git
+.venv
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+data/
+docs/
+deliverables/
+logs/
+models/
+notebooks/
