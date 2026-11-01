@@ -65,7 +65,7 @@ def get_overview_metrics(start_date: date, end_date: date) -> pd.Series:
         )
         SELECT
             COALESCE((
-                SELECT SUM(item_revenue + freight_value)
+                SELECT SUM(item_revenue)
                 FROM dw.fact_sales
                 WHERE purchase_date_key IN (SELECT date_key FROM selected_dates)
             ), 0) AS revenue,
@@ -91,7 +91,7 @@ def get_monthly_sales(start_date: date, end_date: date) -> pd.DataFrame:
         """
         SELECT
             DATE_TRUNC('month', dates.calendar_date)::date AS month,
-            SUM(sales.item_revenue + sales.freight_value) AS revenue,
+            SUM(sales.item_revenue) AS revenue,
             COUNT(DISTINCT sales.order_id) AS orders
         FROM dw.fact_sales sales
         JOIN dw.dim_date dates ON dates.date_key = sales.purchase_date_key
@@ -128,7 +128,7 @@ def get_sales_by_category(start_date: date, end_date: date) -> pd.DataFrame:
         """
         SELECT
             product.category_name_en AS category,
-            SUM(sales.item_revenue + sales.freight_value) AS revenue,
+            SUM(sales.item_revenue) AS revenue,
             COUNT(DISTINCT sales.order_id) AS orders
         FROM dw.fact_sales sales
         JOIN dw.dim_date dates ON dates.date_key = sales.purchase_date_key
@@ -148,7 +148,7 @@ def get_sales_by_customer_state(start_date: date, end_date: date) -> pd.DataFram
         """
         SELECT
             customer.state_code AS customer_state,
-            SUM(sales.item_revenue + sales.freight_value) AS revenue,
+            SUM(sales.item_revenue) AS revenue,
             COUNT(DISTINCT sales.order_id) AS orders
         FROM dw.fact_sales sales
         JOIN dw.dim_date dates ON dates.date_key = sales.purchase_date_key
