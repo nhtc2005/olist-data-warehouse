@@ -183,7 +183,7 @@ Chronology checks identify the following anomalies:
 | Carrier handoff later than customer delivery | 96,475 | 32 |
 | Review answer earlier than review creation | 99,224 | 0 |
 
-The 166 early carrier handoffs and 32 carrier-after-delivery records are source timing contradictions. They must never be rewritten in staging. In the DW, invalid carrier timing is omitted from carrier-based analytical roles and `has_temporal_anomaly` is set to `TRUE`.
+The 166 early carrier handoffs and 32 carrier-after-delivery records are source timing contradictions. They must never be rewritten in staging. The DW uses carrier timestamps to set `has_temporal_anomaly = TRUE` for these contradictions; it does not persist a carrier timestamp or carrier date role.
 
 ### Delivery eligibility
 
@@ -220,15 +220,15 @@ Rules for the warehouse are:
 - Staging retains every raw review row.
 - Do not deduplicate globally by `review_id`, because that would remove a review association from one or more orders without a defensible selection rule.
 - Aggregate all review rows by `order_id` into `review_avg_score` and `review_record_count` for `fact_delivery`.
-- Store a quality indicator such as `has_reused_review_id` or `reused_review_row_count` so the affected orders can be identified.
+- Future enhancement: store a quality indicator such as `has_reused_review_id` or `reused_review_row_count`. These fields are not currently persisted; reused IDs remain observable through source profiling.
 - If a future extract contains an exact full-row duplicate or an identical (`order_id`, `review_id`) duplicate, keep the raw rows in staging but retain one deterministic copy for order-level aggregation and log the excluded duplicate count.
 
 Reviews are outcome information. They support satisfaction KPIs and DSS analysis after fulfilment, but cannot be model features for prediction made at or shortly after order confirmation.
 
 ## Definitions used by the warehouse and DSS
 
-- **Revenue:** `SUM(order_items.price)`. Freight is reported separately and is not product revenue.
-- **Late delivery:** a timeliness-eligible order whose actual delivery timestamp is later than its estimated delivery timestamp. A negative delay means early delivery, not an error.
+- **Dashboard revenue:** sum of item prices for orders whose final status is not `canceled`. Freight is excluded; all other statuses remain included. The DW preserves every source item, including canceled orders. Dashboard sales counts and AOV use distinct non-canceled orders with item lines. Category revenue per order divides category item revenue by distinct orders containing that category; it is not full-basket AOV.
+- **Late delivery:** a timeliness-eligible order whose actual delivery calendar date is later than its estimated delivery calendar date. Delivery at any time on the estimated date is on time. `delivery_delay_days` is the actual date minus the estimated date in whole calendar days: zero for the same date, positive for late delivery, and negative for early delivery.
 - **Review score at order level:** arithmetic mean of valid review scores, with `review_record_count` retained beside the mean. A low-review order has an average score of 2 or below.
 - **Initial DSS geography:** customer state. City-level results are optional only after state-level results are checked for adequate sample size.
 - **Label standardisation:** order status is trimmed and stored in lower case; state is trimmed and stored in upper case; cities are trimmed with repeated spaces reduced, while the raw city remains available for traceability. IDs and ZIP prefixes remain text and are never case-normalised.

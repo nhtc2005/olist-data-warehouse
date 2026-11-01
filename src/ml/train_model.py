@@ -89,7 +89,10 @@ DDL_STATEMENTS: tuple[str, ...] = (
 def load_features() -> pd.DataFrame:
     """Read and prepare eligible labelled orders."""
     with connect_to_warehouse() as connection:
-        features = pd.read_sql_query(FEATURE_QUERY, connection)
+        with connection.cursor() as cursor:
+            cursor.execute(FEATURE_QUERY)
+            columns = [column.name for column in cursor.description]
+            features = pd.DataFrame(cursor.fetchall(), columns=columns)
 
     features["purchase_date"] = pd.to_datetime(
         features["purchase_date_key"].astype(str), format="%Y%m%d", errors="raise"
@@ -127,7 +130,7 @@ def split_features(features: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, 
 
 
 def build_pipeline() -> Pipeline:
-    """Build the selected logistic-regression pipeline."""
+    """Build the logistic-regression pipeline."""
     preprocessor = ColumnTransformer(
         [
             (
@@ -161,11 +164,14 @@ def build_pipeline() -> Pipeline:
 
 
 def evaluate_probabilities(
-    labels: pd.Series, probabilities: np.ndarray, threshold: float | None = None
+    labels: pd.Series, probabilities: np.ndarray, threshold: float | None = None,
+    order_ids: np.ndarray | None = None,
 ) -> dict[str, float | int]:
     """Calculate ranking and calibration metrics."""
-    top_count = max(1, int(np.ceil(len(probabilities) * ALERT_FRACTION)))
-    top_indices = np.argsort(probabilities)[-top_count:]
+    top_count = int(len(probabilities) * ALERT_FRACTION)
+    # Inputs are ordered by purchase day and order ID; break score ties by order ID.
+    tie_keys = order_ids if order_ids is not None else np.arange(len(probabilities))
+    top_indices = np.lexsort((tie_keys, -probabilities))[:top_count]
     metrics: dict[str, float | int] = {
         "pr_auc": float(average_precision_score(labels, probabilities)),
         "roc_auc": float(roc_auc_score(labels, probabilities)),
@@ -193,8 +199,12 @@ def _write_artifacts(
     metadata: dict[str, object],
 ) -> tuple[Path, Path]:
     MODELS_DIR.mkdir(exist_ok=True)
-    joblib.dump(pipeline, MODEL_PATH)
-    METADATA_PATH.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    model_temp = MODEL_PATH.with_suffix(".joblib.tmp")
+    metadata_temp = METADATA_PATH.with_suffix(".json.tmp")
+    joblib.dump(pipeline, model_temp)
+    metadata_temp.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    model_temp.replace(MODEL_PATH)
+    metadata_temp.replace(METADATA_PATH)
     return MODEL_PATH, METADATA_PATH
 
 
@@ -256,7 +266,7 @@ def _persist_scores(
 
 
 def train_and_score() -> dict[str, object]:
-    """Train the selected model, evaluate it, and save holdout scores."""
+    """Train Logistic Regression, evaluate it, and save holdout scores."""
     features = load_features()
     train, validation, test = split_features(features)
     pipeline = build_pipeline()
@@ -270,13 +280,14 @@ def train_and_score() -> dict[str, object]:
     threshold = float(np.quantile(validation_probabilities, 1 - ALERT_FRACTION))
     test_probabilities = pipeline.predict_proba(test[list(MODEL_FEATURES)])[:, 1]
     validation_metrics = evaluate_probabilities(
-        validation_labels, validation_probabilities, threshold
+        validation_labels, validation_probabilities, threshold, validation["order_id"].to_numpy()
     )
-    test_metrics = evaluate_probabilities(test_labels, test_probabilities, threshold)
+    test_metrics = evaluate_probabilities(test_labels, test_probabilities, threshold, test["order_id"].to_numpy())
 
     scored_at = datetime.now(UTC)
     metadata: dict[str, object] = {
         "algorithm": "logistic_regression",
+        "target_definition": "actual_delivery_date_after_estimated_delivery_date",
         "feature_version": "order_delivery_features_v1",
         "features": list(MODEL_FEATURES),
         "alert_fraction": ALERT_FRACTION,
@@ -290,7 +301,6 @@ def train_and_score() -> dict[str, object]:
         "test_metrics": test_metrics,
         "created_at": scored_at.isoformat(),
     }
-    model_path, metadata_path = _write_artifacts(pipeline, metadata)
     _persist_scores(
         validation,
         test,
@@ -299,6 +309,7 @@ def train_and_score() -> dict[str, object]:
         test_probabilities,
         scored_at,
     )
+    model_path, metadata_path = _write_artifacts(pipeline, metadata)
 
     return {
         "model_path": str(model_path),

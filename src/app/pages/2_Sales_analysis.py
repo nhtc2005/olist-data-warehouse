@@ -36,24 +36,36 @@ def format_currency(value: object) -> str:
 def sales_table(frame, group_column: str):
     summary = frame.copy()
     summary["average_order_value"] = summary["revenue"] / summary["orders"]
-    summary["revenue"] = summary["revenue"].map(format_currency)
-    summary["average_order_value"] = summary["average_order_value"].map(format_currency)
+    for column in ("revenue", "average_order_value"):
+        summary[column] = summary[column].astype(float)
+    category = group_column == "category"
+    average_label = "Category revenue per order" if category else "Average order value"
     return st.dataframe(
         summary.rename(
             columns={
                 group_column: "Group",
                 "revenue": "Revenue",
                 "orders": "Orders",
-                "average_order_value": "Average order value",
+                "average_order_value": average_label,
             }
         ),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
+        column_config={
+            "Revenue": st.column_config.NumberColumn(format="R$ %.2f"),
+            average_label: st.column_config.NumberColumn(
+                help=("Revenue from items in this category divided by distinct non-canceled orders containing it. "
+                      "Other categories in the same basket are excluded; orders can appear in multiple categories.")
+                if category else "Item revenue divided by distinct non-canceled orders in this customer state; freight excluded.",
+                format="R$ %.2f",
+            ),
+        },
     )
 
 
 st.title("Sales analysis")
 st.caption("Top product categories and customer states by revenue")
+st.caption("Revenue and order counts exclude canceled orders. Revenue excludes freight; other order statuses are retained.")
 
 try:
     first_purchase, last_purchase = get_purchase_date_bounds()
@@ -101,7 +113,7 @@ with category_col:
         paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=0, r=0, t=45, b=0),
     )
-    st.plotly_chart(category_chart, use_container_width=True)
+    st.plotly_chart(category_chart, width="stretch")
 
 with state_col:
     state_chart = px.bar(
@@ -118,7 +130,7 @@ with state_col:
         paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=0, r=0, t=45, b=0),
     )
-    st.plotly_chart(state_chart, use_container_width=True)
+    st.plotly_chart(state_chart, width="stretch")
 
 category_table_col, state_table_col = st.columns(2)
 with category_table_col:

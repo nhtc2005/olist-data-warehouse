@@ -23,6 +23,6 @@ st.markdown(
 pages = [
     st.Page("pages/1_Overview.py", title="Overview", default=True),
     st.Page("pages/2_Sales_analysis.py", title="Sales analysis"),
-    st.Page("pages/3_Late_delivery_DSS.py", title="Late-delivery DSS"),
+    st.Page("pages/3_Late_delivery_DSS.py", title="Delivery risk simulation"),
 ]
 st.navigation(pages).run()

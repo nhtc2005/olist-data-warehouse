@@ -153,6 +153,26 @@ DW_CHECKS: tuple[CheckDefinition, ...] = (
         """,
     ),
     CheckDefinition(
+        "delivery.late_label_by_date",
+        """
+        SELECT COUNT(*)
+        FROM dw.fact_delivery
+        WHERE is_late IS DISTINCT FROM CASE WHEN is_timeliness_eligible
+            THEN actual_delivery_timestamp::date > estimated_delivery_timestamp::date
+        END
+        """,
+    ),
+    CheckDefinition(
+        "delivery.delay_calendar_days",
+        """
+        SELECT COUNT(*)
+        FROM dw.fact_delivery
+        WHERE delivery_delay_days IS DISTINCT FROM CASE WHEN is_timeliness_eligible
+            THEN actual_delivery_timestamp::date - estimated_delivery_timestamp::date
+        END
+        """,
+    ),
+    CheckDefinition(
         "delivery.temporal_anomaly",
         """
         WITH typed_orders AS (

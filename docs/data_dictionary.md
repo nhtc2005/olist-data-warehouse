@@ -23,7 +23,7 @@ The `DW target type` column shows the typed downstream use of a field. When a so
 | `order_status` | category | `TEXT` | `TEXT` | Lifecycle status, such as `delivered`, `canceled`, or `shipped`. |
 | `order_purchase_timestamp` | `YYYY-MM-DD HH:MI:SS` | `TEXT` | `TIMESTAMP` | Customer purchase time. |
 | `order_approved_at` | timestamp; nullable | `TEXT` | `TIMESTAMP` | Payment/order approval time. |
-| `order_delivered_carrier_date` | timestamp; nullable | `TEXT` | `TIMESTAMP` | Time handed to carrier. |
+| `order_delivered_carrier_date` | timestamp; nullable | `TEXT` | Transient `TIMESTAMP`; not persisted | Time handed to carrier; used to derive temporal anomaly flags. |
 | `order_delivered_customer_date` | timestamp; nullable | `TEXT` | `TIMESTAMP` | Actual delivery time to customer. |
 | `order_estimated_delivery_date` | timestamp | `TEXT` | `TIMESTAMP` | Promised delivery time. |
 
@@ -92,7 +92,7 @@ The `DW target type` column shows the typed downstream use of a field. When a so
 | `review_comment_title` | free text; nullable | `TEXT` | Not loaded | Review title; outside current NLP scope. |
 | `review_comment_message` | free text; nullable | `TEXT` | Not loaded | Review message; outside current NLP scope. |
 | `review_creation_date` | timestamp | `TEXT` | Deduplication ordering | Review creation time. |
-| `review_answer_timestamp` | timestamp; nullable | `TEXT` | Deduplication ordering | Seller/platform response time. |
+| `review_answer_timestamp` | timestamp; nullable | `TEXT` | Deduplication ordering | Source review response/submission timestamp; not a seller-support response metric. |
 
 ### `product_category_name_translation.csv` -> `staging.stg_category_translation`
 
@@ -116,12 +116,13 @@ After loading, validate row counts, candidate-key duplicates, source nulls, and 
 
 ## DW transformation rules
 
-- The DW load first validates the staging contract, then drops and recreates the whole `dw` schema in one transaction. A failed transformation rolls the transaction back; it does not leave a partially refreshed DW.
+- The DW load first runs its pre-transform input checks (not the full staging validation suite), then drops and recreates the whole `dw` schema in one transaction. A failed transformation rolls the transaction back; it does not leave a partially refreshed DW.
 - `dim_date` covers each day from the earliest purchase date through the latest estimated-delivery date. It serves purchase, approval, actual-delivery, and estimated-delivery roles.
 - `dim_customer`, `dim_product`, and `dim_seller` retain source business identifiers and receive surrogate integer keys.
 - `fact_sales` has one row per (`order_id`, `order_item_id`). `item_revenue` comes from `price`, `freight_value` stays separate, and `quantity` is always 1 because a source item row represents one unit. `shipping_limit_timestamp` retains the seller deadline for that item.
 - `fact_delivery` has one row per `order_id`. Before review aggregation, the load keeps one row per (`order_id`, `review_id`), preferring the latest `review_answer_timestamp` and then the latest `review_creation_date`. A reused `review_id` on different orders is retained for every associated order. The remaining rows are aggregated into `review_avg_score` and `review_record_count`.
 - A delivery KPI is eligible only when the order is `delivered`, purchase, actual-delivery, and estimated-delivery timestamps are present, and actual delivery is not before purchase. For ineligible orders, `is_late` and `delivery_delay_days` are `NULL`, never zero.
+- Delivery timeliness uses calendar dates: delivery at any time on the estimated date is on time. The original timestamps remain unchanged.
 - If a product category is missing or has no translation, `category_name_en` is `Unknown / untranslated`; the raw Portuguese category remains available. Zero or negative product dimensions/weight become analytical `NULL` and are flagged with `has_physical_anomaly`.
 - Source timestamps are never corrected. `has_temporal_anomaly` is `TRUE` when approval or carrier handoff precedes purchase, carrier handoff follows actual delivery, actual delivery precedes purchase, or the estimate precedes purchase. A late delivery by itself is not a temporal anomaly.
 
@@ -228,10 +229,10 @@ After loading, validate row counts, candidate-key duplicates, source nulls, and 
 | `purchase_timestamp` | `TIMESTAMP` | `NOT NULL` | Purchase time. |
 | `approved_timestamp` | `TIMESTAMP` | Nullable | Approval time. |
 | `actual_delivery_timestamp` | `TIMESTAMP` | Nullable | Actual delivery time. |
-| `estimated_delivery_timestamp` | `TIMESTAMP` | `NOT NULL` | Promised delivery time. |
+| `estimated_delivery_timestamp` | `TIMESTAMP` | `NOT NULL` | Source estimate; its calendar date is the promised delivery day. |
 | `is_timeliness_eligible` | `BOOLEAN` | `NOT NULL` | Has the valid delivery information required to calculate lateness. |
-| `is_late` | `BOOLEAN` | Nullable; required when timeliness-eligible | `TRUE` when actual delivery is after the estimate. |
-| `delivery_delay_days` | `NUMERIC(10,2)` | Nullable; required when timeliness-eligible | Actual minus estimated delivery time in days. |
+| `is_late` | `BOOLEAN` | Nullable; required when timeliness-eligible | `TRUE` when the actual delivery calendar date is after the estimated delivery calendar date. |
+| `delivery_delay_days` | `NUMERIC(10,2)` | Nullable; required when timeliness-eligible | Actual date minus estimated date in whole calendar days; zero for the same date, positive for late delivery, negative for early delivery. |
 | `has_temporal_anomaly` | `BOOLEAN` | `NOT NULL` | Flags contradictory source event ordering. |
 | `review_avg_score` | `NUMERIC(3,2)` | Nullable; 1-5 when present | Mean review score after per-order review aggregation. |
 | `review_record_count` | `SMALLINT` | `NOT NULL`, default 0, non-negative | Review rows after per-order duplicate-pair handling. |
@@ -240,7 +241,7 @@ The four date-key columns connect the order to its purchase, approval, actual-de
 
 ## ML feature mart
 
-`mart.order_delivery_ml_features` is rebuilt by `olist_ml_features_pipeline` after the DW validation succeeds. Its grain is one row per `order_id`.
+`mart.order_delivery_ml_features` is rebuilt by `olist_ml_features_pipeline`. Run it manually after the DW DAG and its validation succeed; cross-DAG ordering is an operator responsibility. Its grain is one row per `order_id`.
 
 | Column | Type | Constraints | Role and meaning |
 | --- | --- | --- | --- |
@@ -255,13 +256,13 @@ The four date-key columns connect the order to its purchase, approval, actual-de
 | `total_order_value` | `NUMERIC(14,2)` | `NOT NULL`, non-negative | Feature: sum of item revenue and freight. |
 | `is_ml_eligible` | `BOOLEAN` | `NOT NULL` | Eligibility: has approval time, non-negative promised lead time, and at least one item. |
 | `is_timeliness_eligible` | `BOOLEAN` | `NOT NULL` | Historical-label eligibility: has sufficient valid delivery information to determine lateness. |
-| `is_late` | `BOOLEAN` | Nullable; required when timeliness-eligible | Target: `TRUE` when actual delivery was later than estimated delivery. |
+| `is_late` | `BOOLEAN` | Nullable; required when timeliness-eligible | Target copied from DW: `TRUE` when the actual delivery calendar date is after the estimated delivery calendar date. |
 
 The training population is the intersection of `is_ml_eligible = TRUE` and `is_timeliness_eligible = TRUE`. Actual delivery time, delivery delay, final order status, carrier events, reviews, and review-derived fields are intentionally absent to prevent outcome leakage.
 
 ## Model scoring output
 
-`src/ml/train_model.py` fits the selected Logistic Regression model on the earliest 70% of eligible labelled orders, selects its alert threshold from the following 15%, and scores both validation and test orders. It overwrites the current fitted pipeline and metadata under `models/`, then refreshes `mart.order_late_risk` for the dashboard.
+`src/ml/train_model.py` fits the selected Logistic Regression model on the earliest 70% of eligible labelled orders, selects its alert threshold from the following 15%, and scores both validation and test orders. It refreshes `mart.order_late_risk`, then publishes the current fitted pipeline and metadata under `models/`. The dashboard displays only test orders.
 
 ### `mart.order_late_risk`
 
@@ -276,3 +277,11 @@ This table is rebuilt each time the training script runs. It contains the curren
 | `alert_threshold` | `DOUBLE PRECISION` | `NOT NULL`, 0-1 | Run-specific cutoff selected from validation scores. |
 | `risk_band` | `TEXT` | `high` or `routine` | `high` when `risk_probability >= alert_threshold`; otherwise `routine`. |
 | `scored_at` | `TIMESTAMPTZ` | `NOT NULL` | UTC time at which the score was created. |
+
+## Dashboard business measures and score lifecycle
+
+Sales queries exclude `order_status = 'canceled'` by joining `fact_sales` to the one-row-per-order `fact_delivery`. Other statuses remain included. No source rows are deleted from the warehouse. Revenue is item revenue excluding freight; orders are distinct non-canceled orders with item lines; AOV is revenue divided by those orders. Category revenue per order uses only that category's item revenue and orders containing it, with a column tooltip explaining the scope. Category order counts overlap and must not be summed. State AOV uses complete item baskets within the state. Delivery late rate uses a different denominator: timeliness-eligible delivered orders.
+
+The risk dashboard selects test rows only. The Orders to monitor table is a retrospective top-N capacity simulation, not a live queue; actual outcomes are shown separately for evaluation. See modeling.md for formulas and reporting guidance. Monitoring order value includes freight.
+
+Successful staging, DW and feature rebuilds invalidate scores by dropping `mart.order_late_risk` transactionally. Training recreates scores and then publishes artifacts. The dashboard checks scoring timestamp, threshold and split counts against metadata, and test join completeness, in a repeatable-read snapshot on each interaction. Missing or mismatched output requires an ordered pipeline rerun followed by training. Do not run refresh and training concurrently.

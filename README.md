@@ -20,7 +20,7 @@ Airflow runs the three data pipelines on demand:
 2. `olist_dw_pipeline`: rebuilds and validates the data warehouse.
 3. `olist_ml_features_pipeline`: rebuilds and validates the ML feature mart.
 
-Model training is a deliberate local step because the Olist data is static. It uses a chronological split and writes the current model output for the dashboard.
+Model training is a deliberate local step because the Olist data is static. It fits Logistic Regression using a chronological split and writes its output for the dashboard.
 
 ## Business questions
 
@@ -64,13 +64,15 @@ After the ML feature-mart DAG finishes successfully, install the local dependenc
 pip install -r requirements-notebook.txt
 ```
 
-Then train the selected Logistic Regression model and generate risk scores:
+Then train Logistic Regression and generate risk scores:
 
 ```powershell
 python src\ml\train_model.py
 ```
 
-The script overwrites the current model and metadata under `models/`, then refreshes `mart.order_late_risk` with validation and test scores.
+The model uses six features and a chronological 70/15/15 train, validation, and test split. The validation period sets the alert threshold, and the test period evaluates the model.
+
+The script refreshes `mart.order_late_risk` with validation and test scores, then publishes the current model and metadata under `models/`. The dashboard uses test orders only.
 
 ## Run the dashboard
 
@@ -90,7 +92,13 @@ Open `http://localhost:8501`. The dashboard contains:
 
 - **Overview:** revenue, orders, average order value, and late-delivery trends.
 - **Sales analysis:** revenue by product category and customer state.
-- **Late-delivery DSS:** model metrics, high-risk trend, and prioritised orders.
+- **Delivery risk simulation:** test-only order prioritisation, a 0–100% review-capacity slider, an exportable monitoring list, historical coverage, and a random-selection baseline. Technical metrics are available in an expander.
+
+Sales revenue excludes canceled orders and freight; other statuses remain included. Sales order counts and AOV use the same non-canceled population. Category revenue per order counts only the items in that category, not the entire basket; a multi-category order can appear in multiple category groups.
+
+The monitoring list is a historical test-cohort simulation, not a live shipment queue. Its table title is **Orders to monitor**; see [modeling notes](docs/modeling.md) for report wording and evaluation definitions. The page uses test orders only; validation still selects the model's fixed alert threshold.
+
+Any successful staging, DW, or feature-mart rebuild invalidates saved risk scores. Run all three DAGs in the documented order, then rerun `python src/ml/train_model.py`. These are separate manual DAGs; avoid concurrent refresh/training runs. The risk page rejects missing or inconsistent scores and metadata rather than showing stale results.
 
 ## Project structure
 
@@ -109,3 +117,8 @@ models/            Generated model and metadata files
 - [Source data profile](docs/source_data_profile.md)
 - [Data dictionary](docs/data_dictionary.md)
 - [Modeling notes](docs/modeling.md)
+- [Verified report evidence](docs/report_evidence.md)
+- [Warehouse and DSS diagram sources](docs/diagrams/warehouse_and_dss.md)
+- [Report outline and three-person work allocation](docs/report_plan_and_team.md)
+
+The project uses Logistic Regression as its only predictive model. The modeling notes include its measured limitations, the historical review-capacity baseline, and proposed improvements for the course report.

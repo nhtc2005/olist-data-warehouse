@@ -21,6 +21,7 @@ FEATURE_TABLE = "order_delivery_ml_features"
 
 DDL_STATEMENTS: tuple[str, ...] = (
     "CREATE SCHEMA IF NOT EXISTS mart",
+    "DROP TABLE IF EXISTS mart.order_late_risk",
     "DROP TABLE IF EXISTS mart.order_delivery_ml_features",
     """
     CREATE TABLE mart.order_delivery_ml_features (

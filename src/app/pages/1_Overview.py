@@ -42,6 +42,7 @@ def format_percent(value: object) -> str:
 
 st.title("Overview")
 st.caption("Sales and delivery performance from the warehouse")
+st.caption("Revenue and order counts exclude canceled orders. Revenue excludes freight; other order statuses are retained.")
 
 try:
     first_purchase, last_purchase = get_purchase_date_bounds()
@@ -81,7 +82,8 @@ revenue_col, orders_col, average_col, late_col = st.columns(4)
 revenue_col.metric("Revenue", format_currency(revenue))
 orders_col.metric("Orders", f"{orders:,}")
 average_col.metric("Average order value", format_currency(average_order_value))
-late_col.metric("Late-delivery rate", format_percent(metrics["late_rate"]))
+late_col.metric("Late-delivery rate", format_percent(metrics["late_rate"]),
+                help="Late delivered orders / delivered orders with valid delivery dates. This population differs from sales orders.")
 
 sales_chart = make_subplots(specs=[[{"secondary_y": True}]])
 sales_chart.add_trace(
@@ -113,7 +115,7 @@ sales_chart.update_layout(
 )
 sales_chart.update_yaxes(title_text="Revenue (R$)", secondary_y=False)
 sales_chart.update_yaxes(title_text="Orders", secondary_y=True)
-st.plotly_chart(sales_chart, use_container_width=True)
+st.plotly_chart(sales_chart, width="stretch")
 
 late_rate_chart = px.line(
     monthly_late_rate,
@@ -130,4 +132,4 @@ late_rate_chart.update_layout(
     plot_bgcolor="white",
     paper_bgcolor="rgba(0,0,0,0)",
 )
-st.plotly_chart(late_rate_chart, use_container_width=True)
+st.plotly_chart(late_rate_chart, width="stretch")

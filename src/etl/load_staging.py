@@ -226,6 +226,7 @@ def load_staging() -> dict[str, int]:
     with connect_to_warehouse() as connection:
         with connection.cursor() as cursor:
             _create_staging_tables(cursor)
+            cursor.execute("DROP TABLE IF EXISTS mart.order_late_risk")
             _truncate_staging_tables(cursor)
             for dataset in DATASETS:
                 row_counts[dataset.table_name] = _copy_dataset(cursor, dataset)

@@ -611,13 +611,9 @@ SELECT
     o.estimated_delivery_timestamp,
     o.is_timeliness_eligible,
     CASE WHEN o.is_timeliness_eligible
-        THEN o.actual_delivery_timestamp > o.estimated_delivery_timestamp END,
+        THEN o.actual_delivery_timestamp::date > o.estimated_delivery_timestamp::date END,
     CASE WHEN o.is_timeliness_eligible THEN
-        round(
-            (EXTRACT(EPOCH FROM (o.actual_delivery_timestamp - o.estimated_delivery_timestamp))
-                / 86400.0)::numeric,
-            2
-        )
+        o.actual_delivery_timestamp::date - o.estimated_delivery_timestamp::date
     END,
     o.has_temporal_anomaly,
     r.review_avg_score,
@@ -678,6 +674,7 @@ def transform_and_load_dw() -> dict[str, int]:
     with connect_to_warehouse() as connection:
         with connection.cursor() as cursor:
             _run_pre_transform_checks(cursor)
+            cursor.execute("DROP TABLE IF EXISTS mart.order_late_risk")
             _rebuild_dw_schema(cursor)
             _load_dw(cursor)
             counts = _row_counts(cursor)

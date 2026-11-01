@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -47,6 +48,8 @@ def get_purchase_date_bounds() -> tuple[date, date]:
             MAX(calendar_date) AS last_purchase_date
         FROM dw.fact_sales sales
         JOIN dw.dim_date dates ON dates.date_key = sales.purchase_date_key
+        JOIN dw.fact_delivery delivery ON delivery.order_id = sales.order_id
+        WHERE delivery.order_status <> 'canceled'
         """
     ).iloc[0]
     if pd.isna(result["first_purchase_date"]) or pd.isna(result["last_purchase_date"]):
@@ -68,11 +71,13 @@ def get_overview_metrics(start_date: date, end_date: date) -> pd.Series:
                 SELECT SUM(item_revenue)
                 FROM dw.fact_sales
                 WHERE purchase_date_key IN (SELECT date_key FROM selected_dates)
+                  AND order_id IN (SELECT order_id FROM dw.fact_delivery WHERE order_status <> 'canceled')
             ), 0) AS revenue,
             (
                 SELECT COUNT(DISTINCT order_id)
                 FROM dw.fact_sales
                 WHERE purchase_date_key IN (SELECT date_key FROM selected_dates)
+                  AND order_id IN (SELECT order_id FROM dw.fact_delivery WHERE order_status <> 'canceled')
             ) AS orders,
             (
                 SELECT AVG(CASE WHEN is_late THEN 1.0 ELSE 0.0 END)
@@ -95,7 +100,9 @@ def get_monthly_sales(start_date: date, end_date: date) -> pd.DataFrame:
             COUNT(DISTINCT sales.order_id) AS orders
         FROM dw.fact_sales sales
         JOIN dw.dim_date dates ON dates.date_key = sales.purchase_date_key
+        JOIN dw.fact_delivery delivery ON delivery.order_id = sales.order_id
         WHERE dates.calendar_date BETWEEN %s AND %s
+          AND delivery.order_status <> 'canceled'
         GROUP BY 1
         ORDER BY 1
         """,
@@ -133,7 +140,9 @@ def get_sales_by_category(start_date: date, end_date: date) -> pd.DataFrame:
         FROM dw.fact_sales sales
         JOIN dw.dim_date dates ON dates.date_key = sales.purchase_date_key
         JOIN dw.dim_product product ON product.product_key = sales.product_key
+        JOIN dw.fact_delivery delivery ON delivery.order_id = sales.order_id
         WHERE dates.calendar_date BETWEEN %s AND %s
+          AND delivery.order_status <> 'canceled'
         GROUP BY 1
         ORDER BY revenue DESC
         LIMIT 10
@@ -153,7 +162,9 @@ def get_sales_by_customer_state(start_date: date, end_date: date) -> pd.DataFram
         FROM dw.fact_sales sales
         JOIN dw.dim_date dates ON dates.date_key = sales.purchase_date_key
         JOIN dw.dim_customer customer ON customer.customer_key = sales.customer_key
+        JOIN dw.fact_delivery delivery ON delivery.order_id = sales.order_id
         WHERE dates.calendar_date BETWEEN %s AND %s
+          AND delivery.order_status <> 'canceled'
         GROUP BY 1
         ORDER BY revenue DESC
         LIMIT 10
@@ -170,79 +181,41 @@ def get_model_metadata() -> dict[str, object]:
     return json.loads(metadata_path.read_text(encoding="utf-8"))
 
 
-def get_risk_customer_states() -> list[str]:
-    """Return customer states represented in the current scores."""
-    states = _read_query(
-        """
-        SELECT DISTINCT features.customer_state
-        FROM mart.order_late_risk risk
-        JOIN mart.order_delivery_ml_features features ON features.order_id = risk.order_id
-        ORDER BY features.customer_state
-        """
-    )
-    return states["customer_state"].tolist()
-
-
-def get_risk_summary(population: str, customer_state: str) -> pd.Series:
-    """Return score counts for the selected risk population."""
-    return _read_query(
-        """
-        SELECT
-            COUNT(*) AS scored_orders,
-            COUNT(*) FILTER (WHERE risk.risk_band = 'high') AS high_risk_orders
-        FROM mart.order_late_risk risk
-        JOIN mart.order_delivery_ml_features features ON features.order_id = risk.order_id
-        WHERE (%s = 'all' OR risk.population = %s)
-          AND (%s = 'all' OR features.customer_state = %s)
-        """,
-        (population, population, customer_state, customer_state),
-    ).iloc[0]
-
-
-def get_monthly_high_risk(population: str, customer_state: str) -> pd.DataFrame:
-    """Return monthly scored and high-risk order counts."""
-    return _read_query(
-        """
-        SELECT
-            DATE_TRUNC('month', dates.calendar_date)::date AS month,
-            COUNT(*) AS scored_orders,
-            COUNT(*) FILTER (WHERE risk.risk_band = 'high') AS high_risk_orders
-        FROM mart.order_late_risk risk
-        JOIN mart.order_delivery_ml_features features ON features.order_id = risk.order_id
-        JOIN dw.dim_date dates ON dates.date_key = risk.purchase_date_key
-        WHERE (%s = 'all' OR risk.population = %s)
-          AND (%s = 'all' OR features.customer_state = %s)
-        GROUP BY 1
-        ORDER BY 1
-        """,
-        (population, population, customer_state, customer_state),
-    )
-
-
-def get_risk_orders(
-    population: str, customer_state: str, only_high_risk: bool
-) -> pd.DataFrame:
-    """Return the highest-priority scored orders for the dashboard."""
-    return _read_query(
-        """
-        SELECT
-            risk.order_id,
-            dates.calendar_date AS purchase_date,
-            features.customer_state,
-            features.promised_lead_time_days,
-            features.item_count,
-            features.total_order_value,
-            features.has_out_of_state_seller,
-            risk.risk_probability,
-            risk.risk_band
-        FROM mart.order_late_risk risk
-        JOIN mart.order_delivery_ml_features features ON features.order_id = risk.order_id
-        JOIN dw.dim_date dates ON dates.date_key = risk.purchase_date_key
-        WHERE (%s = 'all' OR risk.population = %s)
-          AND (%s = 'all' OR features.customer_state = %s)
-          AND (NOT %s OR risk.risk_band = 'high')
-        ORDER BY risk.risk_probability DESC, risk.order_id
-        LIMIT 500
-        """,
-        (population, population, customer_state, customer_state, only_high_risk),
-    )
+def get_test_review_data(metadata: dict[str, object]) -> pd.DataFrame:
+    """Read a consistent score/feature snapshot and reject mismatched model artifacts."""
+    with _connect() as connection:
+        connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        cursor = connection.cursor()
+        cursor.execute("SELECT to_regclass('mart.order_late_risk')")
+        if cursor.fetchone()[0] is None:
+            raise RuntimeError("Risk scores are unavailable or were invalidated by a data refresh. Run all data pipelines in order, then run src/ml/train_model.py.")
+        cursor.execute("""SELECT population, COUNT(*), MIN(scored_at), MAX(scored_at),
+                          MIN(alert_threshold), MAX(alert_threshold)
+                          FROM mart.order_late_risk GROUP BY population""")
+        groups = cursor.fetchall()
+        expected_time = datetime.fromisoformat(str(metadata["created_at"]))
+        expected_threshold = float(metadata["alert_threshold"])
+        if {row[0] for row in groups} != {"validation", "test"} or any(
+            count != metadata["splits"][population]["orders"]
+            or first != expected_time or last != expected_time
+            or abs(low - expected_threshold) > 1e-12 or abs(high - expected_threshold) > 1e-12
+            for population, count, first, last, low, high in groups
+        ):
+            raise RuntimeError("Model metadata and saved risk scores do not match. Run src/ml/train_model.py to publish a consistent result.")
+        cursor.execute("""
+            SELECT risk.order_id, dates.calendar_date AS purchase_date,
+                delivery.estimated_delivery_timestamp::date AS promised_delivery_date,
+                features.customer_state, features.promised_lead_time_days,
+                features.item_count, features.total_order_value,
+                risk.risk_probability, features.is_late
+            FROM mart.order_late_risk risk
+            JOIN mart.order_delivery_ml_features features USING (order_id)
+            JOIN dw.fact_delivery delivery USING (order_id)
+            JOIN dw.dim_date dates ON dates.date_key = risk.purchase_date_key
+            WHERE risk.population = 'test'
+            ORDER BY risk.risk_probability DESC, risk.order_id
+        """)
+        frame = pd.DataFrame(cursor.fetchall(), columns=[column.name for column in cursor.description])
+        if len(frame) != metadata["splits"]["test"]["orders"] or frame["is_late"].isna().any():
+            raise RuntimeError("Scores no longer match warehouse features. Rebuild the feature mart and run src/ml/train_model.py.")
+        return frame
