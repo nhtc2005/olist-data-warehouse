@@ -19,7 +19,7 @@ Generated on 2026-11-01 from the current local PostgreSQL database, model metada
 | dw | `dim_product` | 32,951 | 14 |
 | dw | `dim_seller` | 3,095 | 6 |
 | dw | `fact_delivery` | 99,441 | 17 |
-| dw | `fact_sales` | 112,650 | 10 |
+| dw | `fact_sales` | 112,650 | 9 |
 | mart | `order_delivery_ml_features` | 99,441 | 12 |
 | mart | `order_late_risk` | 28,935 | 7 |
 | staging | `stg_category_translation` | 71 | 2 |
@@ -30,7 +30,9 @@ Generated on 2026-11-01 from the current local PostgreSQL database, model metada
 | staging | `stg_reviews` | 99,224 | 7 |
 | staging | `stg_sellers` | 3,095 | 4 |
 
-The DW has six physical tables (four dimensions and two facts), with 64 columns in total. Staging has seven tables; the feature/scoring mart has two.
+The DW has six physical tables (four dimensions and two facts), with 63 columns in total. Staging has seven tables; the feature/scoring mart has two.
+
+Schema update on 2026-11-03: the redundant constant quantity column was removed from the DW creation/load code. Column counts above describe the revised schema after the next pipeline rebuild, which has not been run as part of this edit. Row counts and numerical results remain the measured 2026-11-01 snapshot. Each sales row still represents one item unit, counted using `COUNT(*)`.
 
 ## Dashboard sales and delivery measures
 

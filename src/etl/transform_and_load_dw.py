@@ -287,7 +287,6 @@ DDL_STATEMENTS: tuple[str, ...] = (
         shipping_limit_timestamp TIMESTAMP NOT NULL,
         item_revenue NUMERIC(14, 2) NOT NULL CHECK (item_revenue >= 0),
         freight_value NUMERIC(14, 2) NOT NULL CHECK (freight_value >= 0),
-        quantity SMALLINT NOT NULL DEFAULT 1 CHECK (quantity = 1),
         PRIMARY KEY (order_id, order_item_id)
     )
     """,
@@ -490,8 +489,7 @@ INSERT INTO dw.fact_sales (
     purchase_date_key,
     shipping_limit_timestamp,
     item_revenue,
-    freight_value,
-    quantity
+    freight_value
 )
 SELECT
     i.order_id,
@@ -502,8 +500,7 @@ SELECT
     to_char(o.purchase_timestamp::date, 'YYYYMMDD')::integer,
     i.shipping_limit_timestamp,
     i.item_revenue,
-    i.freight_value,
-    1
+    i.freight_value
 FROM typed_items i
 JOIN typed_orders o ON o.order_id = i.order_id
 JOIN dw.dim_customer c ON c.customer_id = o.customer_id

@@ -119,7 +119,7 @@ After loading, validate row counts, candidate-key duplicates, source nulls, and 
 - The DW load first runs its pre-transform input checks (not the full staging validation suite), then drops and recreates the whole `dw` schema in one transaction. A failed transformation rolls the transaction back; it does not leave a partially refreshed DW.
 - `dim_date` covers each day from the earliest purchase date through the latest estimated-delivery date. It serves purchase, approval, actual-delivery, and estimated-delivery roles.
 - `dim_customer`, `dim_product`, and `dim_seller` retain source business identifiers and receive surrogate integer keys.
-- `fact_sales` has one row per (`order_id`, `order_item_id`). `item_revenue` comes from `price`, `freight_value` stays separate, and `quantity` is always 1 because a source item row represents one unit. `shipping_limit_timestamp` retains the seller deadline for that item.
+- `fact_sales` has one row per (`order_id`, `order_item_id`), representing one item unit. Unit count is derived using `COUNT(*)`; no separate quantity column is stored. `item_revenue` comes from `price`, and `freight_value` stays separate. `shipping_limit_timestamp` retains the seller deadline for that item.
 - `fact_delivery` has one row per `order_id`. Before review aggregation, the load keeps one row per (`order_id`, `review_id`), preferring the latest `review_answer_timestamp` and then the latest `review_creation_date`. A reused `review_id` on different orders is retained for every associated order. The remaining rows are aggregated into `review_avg_score` and `review_record_count`.
 - A delivery KPI is eligible only when the order is `delivered`, purchase, actual-delivery, and estimated-delivery timestamps are present, and actual delivery is not before purchase. For ineligible orders, `is_late` and `delivery_delay_days` are `NULL`, never zero.
 - Delivery timeliness uses calendar dates: delivery at any time on the estimated date is on time. The original timestamps remain unchanged.
@@ -211,9 +211,8 @@ After loading, validate row counts, candidate-key duplicates, source nulls, and 
 | `shipping_limit_timestamp` | `TIMESTAMP` | `NOT NULL` | Seller shipping deadline for the item line. |
 | `item_revenue` | `NUMERIC(14,2)` | `NOT NULL`, non-negative | Item `price`, excluding freight. |
 | `freight_value` | `NUMERIC(14,2)` | `NOT NULL`, non-negative | Freight charge for the item line. |
-| `quantity` | `SMALLINT` | `NOT NULL`, default and constrained to 1 | One source item row represents one unit. |
 
-`shipping_limit_timestamp` is retained because it is useful for analysing seller fulfilment deadlines and deriving later DSS features.
+Each row represents one item unit. Use `COUNT(*)` for unit count and `COUNT(DISTINCT order_id)` for order count within the intended filters. `shipping_limit_timestamp` is retained because it is useful for analysing seller fulfilment deadlines and deriving later DSS features.
 
 ### `dw.fact_delivery`
 

@@ -78,7 +78,7 @@ erDiagram
     }
 ```
 
-This diagram shows selected fields; the complete 64-column physical contract is in data_dictionary.md. Four dimensions and two facts form a shared-dimension fact constellation. Each fact has a star-shaped relationship to its dimensions. The date table plays four roles for delivery; approval and actual-delivery foreign keys are nullable.
+This diagram shows selected fields; the complete 63-column physical contract is in data_dictionary.md. Four dimensions and two facts form a shared-dimension fact constellation. Each fact has a star-shaped relationship to its dimensions. The date table plays four roles for delivery; approval and actual-delivery foreign keys are nullable. Each sales row represents one item unit; unit counts use `COUNT(*)` without a stored quantity column.
 
 fact_sales has one row per (order_id, order_item_id); fact_delivery has one row per order. Do not join the two facts and sum order-level values without respecting their different grains. Aggregate item data to order grain first for the ML mart. Reviews are deduplicated per (order_id, review_id), then aggregated by order before being attached to fact_delivery.
 
